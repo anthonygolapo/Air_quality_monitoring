@@ -915,6 +915,7 @@ function WarmupPanel({ readings, now, resetAt, onReset, isResetting }) {
 export default function App() {
   const latest = useQuery(api.readings.getLatest);
   const readings = useQuery(api.readings.listRecent, { limit: 500 });
+  const packetGapSummary = useQuery(api.readings.getPacketGapSummary);
   const warmupReset = useQuery(api.readings.getWarmupReset);
   const resetWarmupTimer = useMutation(api.readings.resetWarmupTimer);
   const trend = readings ? [...readings].reverse() : [];
@@ -1083,6 +1084,56 @@ export default function App() {
               <h2>Current payload</h2>
             </div>
           </div>
+
+          <div className="packet-gap-summary">
+            <article>
+              <p className="panel-kicker">Missing packets</p>
+              <h3>{packetGapSummary?.totalMissingPackets ?? "--"}</h3>
+            </article>
+            <article>
+              <p className="panel-kicker">Gap events</p>
+              <h3>{packetGapSummary?.gapEvents ?? "--"}</h3>
+            </article>
+            <article>
+              <p className="panel-kicker">Longest gap</p>
+              <h3>{packetGapSummary?.longestGapPackets ?? "--"}</h3>
+            </article>
+            <article>
+              <p className="panel-kicker">Sequence resets</p>
+              <h3>{packetGapSummary?.resetsDetected ?? "--"}</h3>
+            </article>
+          </div>
+
+          <p className="packet-gap-note">
+            Missing packets are counted when the current packet sequence jumps by more than 1. If
+            sequence is unavailable, the dashboard falls back to 1-minute timing gaps.
+          </p>
+
+          {packetGapSummary?.latestGap ? (
+            <div className="latest-gap-card">
+              <p className="panel-kicker">Latest detected gap</p>
+              <p className="latest-gap-main">
+                {packetGapSummary.latestGap.missingPackets} missing packet
+                {packetGapSummary.latestGap.missingPackets === 1 ? "" : "s"}
+              </p>
+              <p className="latest-gap-sub">
+                Between {formatDate(packetGapSummary.latestGap.fromTimestamp)} and{" "}
+                {formatDate(packetGapSummary.latestGap.toTimestamp)}
+              </p>
+              <p className="latest-gap-sub">
+                {packetGapSummary.latestGap.fromSequence !== null &&
+                packetGapSummary.latestGap.toSequence !== null
+                  ? `Sequence ${packetGapSummary.latestGap.fromSequence} to ${packetGapSummary.latestGap.toSequence}`
+                  : "Detected from packet timing"}
+              </p>
+            </div>
+          ) : (
+            <p className="packet-gap-note">
+              {packetGapSummary
+                ? "No missing packet gaps detected in the full stored history."
+                : "Loading full packet history summary..."}
+            </p>
+          )}
 
           <dl className="details-list">
             <div>

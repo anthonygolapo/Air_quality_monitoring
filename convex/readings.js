@@ -1,6 +1,8 @@
 import { v } from "convex/values";
 import { mutation, query } from "./_generated/server";
 
+const EXPECTED_PACKET_MS = 60 * 1000;
+
 function parseMaybeNumber(value) {
   if (value === null || value === undefined || value === "" || value === "nan") {
     return undefined;
@@ -46,6 +48,80 @@ function parsePayload(rawPayload) {
     pm2p5: parseMaybeNumber(parts[10]),
     pm10: parseMaybeNumber(parts[11]),
     status: statusSection,
+  };
+}
+
+function isFiniteNumber(value) {
+  return typeof value === "number" && Number.isFinite(value);
+}
+
+function computePacketGapSummary(readings) {
+  if (readings.length < 2) {
+    return {
+      totalMissingPackets: 0,
+      gapEvents: 0,
+      longestGapPackets: 0,
+      resetsDetected: 0,
+      latestGap: null,
+    };
+  }
+
+  let totalMissingPackets = 0;
+  let gapEvents = 0;
+  let longestGapPackets = 0;
+  let resetsDetected = 0;
+  let latestGap = null;
+
+  for (let index = 1; index < readings.length; index += 1) {
+    const previous = readings[index - 1];
+    const current = readings[index];
+    const previousTimestamp = previous.capturedAt ?? previous._creationTime;
+    const currentTimestamp = current.capturedAt ?? current._creationTime;
+    const previousSequence = previous.sequence;
+    const currentSequence = current.sequence;
+
+    let missingPackets = 0;
+    let basis = "time";
+
+    if (isFiniteNumber(previousSequence) && isFiniteNumber(currentSequence)) {
+      if (currentSequence > previousSequence) {
+        missingPackets = Math.max(currentSequence - previousSequence - 1, 0);
+        basis = "sequence";
+      } else if (currentSequence < previousSequence) {
+        resetsDetected += 1;
+        continue;
+      } else {
+        continue;
+      }
+    } else {
+      const elapsedMs = currentTimestamp - previousTimestamp;
+      const inferredIntervals = Math.max(1, Math.round(elapsedMs / EXPECTED_PACKET_MS));
+      missingPackets = Math.max(inferredIntervals - 1, 0);
+    }
+
+    if (missingPackets <= 0) {
+      continue;
+    }
+
+    totalMissingPackets += missingPackets;
+    gapEvents += 1;
+    longestGapPackets = Math.max(longestGapPackets, missingPackets);
+    latestGap = {
+      fromSequence: previousSequence ?? null,
+      toSequence: currentSequence ?? null,
+      fromTimestamp: previousTimestamp,
+      toTimestamp: currentTimestamp,
+      missingPackets,
+      basis,
+    };
+  }
+
+  return {
+    totalMissingPackets,
+    gapEvents,
+    longestGapPackets,
+    resetsDetected,
+    latestGap,
   };
 }
 
@@ -114,6 +190,19 @@ export const listRecent = query({
   handler: async (ctx, args) => {
     const limit = Math.min(args.limit ?? 20, 2000);
     return await ctx.db.query("readings").order("desc").take(limit);
+  },
+});
+
+export const getPacketGapSummary = query({
+  args: {},
+  handler: async (ctx) => {
+    const readings = await ctx.db
+      .query("readings")
+      .withIndex("by_capturedAt")
+      .order("asc")
+      .collect();
+
+    return computePacketGapSummary(readings);
   },
 });
 

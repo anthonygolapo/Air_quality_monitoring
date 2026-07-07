@@ -632,6 +632,41 @@ th {
   margin: 0;
 }
 
+.packet-gap-summary {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin-bottom: 14px;
+}
+
+.packet-gap-summary article,
+.latest-gap-card {
+  padding: 14px 16px;
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.packet-gap-summary h3,
+.latest-gap-main {
+  margin: 8px 0 0;
+  font-size: 1.3rem;
+}
+
+.packet-gap-note,
+.latest-gap-sub {
+  margin: 0 0 14px;
+  color: #b8c4ff;
+  line-height: 1.5;
+}
+
+.latest-gap-card {
+  margin-bottom: 14px;
+}
+
+.latest-gap-card .panel-kicker {
+  margin: 0;
+}
+
 .details-list div {
   padding: 14px 16px;
   border-radius: 16px;
@@ -665,7 +700,8 @@ th {
   .metrics-grid,
   .stability-grid,
   .warmup-grid,
-  .warmup-stats {
+  .warmup-stats,
+  .packet-gap-summary {
     grid-template-columns: 1fr;
   }
 
