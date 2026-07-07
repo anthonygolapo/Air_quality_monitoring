@@ -536,15 +536,26 @@ button:disabled {
   display: flex;
   flex-wrap: wrap;
   gap: 14px;
-  color: #d6dcff;
-  font-size: 0.9rem;
   margin-bottom: 14px;
 }
 
-.chart-legend span {
+.sensor-chip {
   display: inline-flex;
   align-items: center;
   gap: 6px;
+  color: #d6dcff;
+  font-size: 0.9rem;
+  border: 1px solid rgba(154, 167, 255, 0.18);
+  background: rgba(255, 255, 255, 0.04);
+  padding: 8px 12px;
+  border-radius: 999px;
+  cursor: pointer;
+  transition: 160ms ease;
+}
+
+.sensor-chip.active {
+  background: rgba(255, 255, 255, 0.1);
+  border-color: rgba(255, 255, 255, 0.24);
 }
 
 .chart-legend i {

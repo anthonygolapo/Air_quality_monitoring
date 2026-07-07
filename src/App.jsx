@@ -609,13 +609,14 @@ function buildLinePath(points, key, chartWidth, chartHeight, minValue, maxValue)
     .join(" ");
 }
 
-function GasTrendChart({ readings, rangeKey, onRangeChange }) {
+function GasTrendChart({ readings, rangeKey, onRangeChange, visibleSensors, onToggleSensor }) {
   const selectedRange = rangeOptions.find((option) => option.key === rangeKey) ?? rangeOptions[1];
   const points = buildGasChartPoints(readings ?? [], selectedRange);
+  const activeSeries = gasSeries.filter((series) => visibleSensors.includes(series.key));
   const chartWidth = 640;
   const chartHeight = 260;
   const allValues = points.flatMap((point) =>
-    gasSeries.map((series) => point[series.key]).filter(
+    activeSeries.map((series) => point[series.key]).filter(
       (value) => value !== null && value !== undefined && !Number.isNaN(value),
     ),
   );
@@ -645,10 +646,15 @@ function GasTrendChart({ readings, rangeKey, onRangeChange }) {
 
       <div className="chart-legend">
         {gasSeries.map((series) => (
-          <span key={series.key}>
+          <button
+            key={series.key}
+            type="button"
+            onClick={() => onToggleSensor(series.key)}
+            className={visibleSensors.includes(series.key) ? "sensor-chip active" : "sensor-chip"}
+          >
             <i style={{ backgroundColor: series.color }} />
             {series.label}
-          </span>
+          </button>
         ))}
       </div>
 
@@ -669,7 +675,7 @@ function GasTrendChart({ readings, rangeKey, onRangeChange }) {
               className="grid-line"
             />
           ))}
-          {gasSeries.map((series) => {
+          {activeSeries.map((series) => {
             const path = buildLinePath(points, series.key, chartWidth, chartHeight, 0, yMax);
             return path ? (
               <path
@@ -683,7 +689,7 @@ function GasTrendChart({ readings, rangeKey, onRangeChange }) {
               />
             ) : null;
           })}
-          {gasSeries.flatMap((series) =>
+          {activeSeries.flatMap((series) =>
             points.map((point, index) => {
               const value = point[series.key];
               if (value === null || value === undefined || Number.isNaN(value)) {
@@ -708,10 +714,10 @@ function GasTrendChart({ readings, rangeKey, onRangeChange }) {
       </div>
 
       <div className="chart-x-axis">
-        {points.length > 0 ? (
+        {points.length > 0 && activeSeries.length > 0 ? (
           points.map((point) => <span key={point.timestamp}>{formatAxisLabel(point.timestamp, selectedRange.key)}</span>)
         ) : (
-          <span>No data yet</span>
+          <span>{activeSeries.length === 0 ? "Select at least one sensor" : "No data yet"}</span>
         )}
       </div>
     </article>
@@ -913,6 +919,7 @@ export default function App() {
   const resetWarmupTimer = useMutation(api.readings.resetWarmupTimer);
   const trend = readings ? [...readings].reverse() : [];
   const [selectedRange, setSelectedRange] = useState("day");
+  const [visibleSensors, setVisibleSensors] = useState(gasSeries.map((series) => series.key));
   const [now, setNow] = useState(Date.now());
   const [isResettingWarmup, setIsResettingWarmup] = useState(false);
   const hasNotifiedRef = useRef(false);
@@ -976,6 +983,16 @@ export default function App() {
     } finally {
       setIsResettingWarmup(false);
     }
+  }
+
+  function handleToggleSensor(sensorKey) {
+    setVisibleSensors((current) => {
+      if (current.includes(sensorKey)) {
+        return current.length === 1 ? current : current.filter((key) => key !== sensorKey);
+      }
+
+      return [...current, sensorKey];
+    });
   }
 
   return (
@@ -1055,6 +1072,8 @@ export default function App() {
           readings={trend}
           rangeKey={selectedRange}
           onRangeChange={setSelectedRange}
+          visibleSensors={visibleSensors}
+          onToggleSensor={handleToggleSensor}
         />
 
         <article className="panel">
