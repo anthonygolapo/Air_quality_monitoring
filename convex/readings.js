@@ -2,6 +2,7 @@ import { v } from "convex/values";
 import { mutation, query } from "./_generated/server";
 
 const EXPECTED_PACKET_MS = 60 * 1000;
+const INVALID_SENTINEL = -9999;
 
 function parseMaybeNumber(value) {
   if (value === null || value === undefined || value === "" || value === "nan") {
@@ -9,7 +10,23 @@ function parseMaybeNumber(value) {
   }
 
   const parsed = Number(value);
-  return Number.isFinite(parsed) ? parsed : undefined;
+  if (!Number.isFinite(parsed) || parsed === INVALID_SENTINEL) {
+    return undefined;
+  }
+
+  return parsed;
+}
+
+function hasValidityBit(validityMask, bitIndex) {
+  return Number.isInteger(validityMask) && (validityMask & (1 << bitIndex)) !== 0;
+}
+
+function normalizeWithValidity(value, validityMask, bitIndex) {
+  if (!hasValidityBit(validityMask, bitIndex)) {
+    return undefined;
+  }
+
+  return value;
 }
 
 function parseStatusFromPayload(rawPayload) {
@@ -19,6 +36,23 @@ function parseStatusFromPayload(rawPayload) {
 
   const match = rawPayload.match(/STAT=([A-Z0-9]+)/);
   return match ? match[1] : undefined;
+}
+
+function formatValidityStatus(validityMask) {
+  if (!Number.isInteger(validityMask)) {
+    return undefined;
+  }
+
+  const labels = [
+    validityMask & (1 << 0) ? "CO" : "co?",
+    validityMask & (1 << 1) ? "O3" : "o3?",
+    validityMask & (1 << 2) ? "NO2" : "no2?",
+    validityMask & (1 << 3) ? "SO2" : "so2?",
+    validityMask & (1 << 4) ? "PM" : "pm?",
+    validityMask & (1 << 5) ? "ENV" : "env?",
+  ];
+
+  return labels.join(" ");
 }
 
 function parsePayload(rawPayload) {
@@ -134,41 +168,103 @@ export const ingestReading = mutation({
     capturedAt: v.optional(v.number()),
     rssi: v.optional(v.number()),
     snr: v.optional(v.number()),
+    validityMask: v.optional(v.number()),
+    crc: v.optional(v.string()),
+    crcOk: v.optional(v.boolean()),
     so2Ppb: v.optional(v.union(v.number(), v.string())),
     no2Ppb: v.optional(v.union(v.number(), v.string())),
     o3Ppb: v.optional(v.union(v.number(), v.string())),
     coPpb: v.optional(v.union(v.number(), v.string())),
     temperatureC: v.optional(v.union(v.number(), v.string())),
     humidityRh: v.optional(v.union(v.number(), v.string())),
+    humidityPercent: v.optional(v.union(v.number(), v.string())),
     pm1p0: v.optional(v.union(v.number(), v.string())),
     pm2p5: v.optional(v.union(v.number(), v.string())),
+    pm1_0: v.optional(v.union(v.number(), v.string())),
+    pm2_5: v.optional(v.union(v.number(), v.string())),
     pm10: v.optional(v.union(v.number(), v.string())),
   },
   handler: async (ctx, args) => {
     const parsedPayload = parsePayload(args.rawPayload);
+    const parsedValidityMask = parseMaybeNumber(args.validityMask);
+    const derivedStatus =
+      args.status ??
+      parsedPayload.status ??
+      parseStatusFromPayload(args.rawPayload) ??
+      formatValidityStatus(parsedValidityMask);
+
+    const so2Ppb = normalizeWithValidity(
+      parseMaybeNumber(args.so2Ppb) ?? parsedPayload.so2Ppb,
+      parsedValidityMask,
+      3
+    );
+    const no2Ppb = normalizeWithValidity(
+      parseMaybeNumber(args.no2Ppb) ?? parsedPayload.no2Ppb,
+      parsedValidityMask,
+      2
+    );
+    const o3Ppb = normalizeWithValidity(
+      parseMaybeNumber(args.o3Ppb) ?? parsedPayload.o3Ppb,
+      parsedValidityMask,
+      1
+    );
+    const coPpb = normalizeWithValidity(
+      parseMaybeNumber(args.coPpb) ?? parsedPayload.coPpb,
+      parsedValidityMask,
+      0
+    );
+    const temperatureC = normalizeWithValidity(
+      parseMaybeNumber(args.temperatureC) ?? parsedPayload.temperatureC,
+      parsedValidityMask,
+      5
+    );
+    const humidityRh = normalizeWithValidity(
+      parseMaybeNumber(args.humidityRh) ??
+        parseMaybeNumber(args.humidityPercent) ??
+        parsedPayload.humidityRh,
+      parsedValidityMask,
+      5
+    );
+    const pm1p0 = normalizeWithValidity(
+      parseMaybeNumber(args.pm1p0) ??
+        parseMaybeNumber(args.pm1_0) ??
+        parsedPayload.pm1p0,
+      parsedValidityMask,
+      4
+    );
+    const pm2p5 = normalizeWithValidity(
+      parseMaybeNumber(args.pm2p5) ??
+        parseMaybeNumber(args.pm2_5) ??
+        parsedPayload.pm2p5,
+      parsedValidityMask,
+      4
+    );
+    const pm10 = normalizeWithValidity(
+      parseMaybeNumber(args.pm10) ?? parsedPayload.pm10,
+      parsedValidityMask,
+      4
+    );
 
     const doc = {
       nodeId: args.nodeId ?? parsedPayload.nodeId ?? "NODE-001",
       sequence: args.sequence ?? parsedPayload.sequence,
-      status:
-        args.status ??
-        parsedPayload.status ??
-        parseStatusFromPayload(args.rawPayload),
+      status: derivedStatus,
       rawPayload: args.rawPayload,
       capturedAt: args.capturedAt ?? Date.now(),
       rssi: args.rssi,
       snr: args.snr,
-      so2Ppb: parseMaybeNumber(args.so2Ppb) ?? parsedPayload.so2Ppb,
-      no2Ppb: parseMaybeNumber(args.no2Ppb) ?? parsedPayload.no2Ppb,
-      o3Ppb: parseMaybeNumber(args.o3Ppb) ?? parsedPayload.o3Ppb,
-      coPpb: parseMaybeNumber(args.coPpb) ?? parsedPayload.coPpb,
-      temperatureC:
-        parseMaybeNumber(args.temperatureC) ?? parsedPayload.temperatureC,
-      humidityRh:
-        parseMaybeNumber(args.humidityRh) ?? parsedPayload.humidityRh,
-      pm1p0: parseMaybeNumber(args.pm1p0) ?? parsedPayload.pm1p0,
-      pm2p5: parseMaybeNumber(args.pm2p5) ?? parsedPayload.pm2p5,
-      pm10: parseMaybeNumber(args.pm10) ?? parsedPayload.pm10,
+      validityMask: parsedValidityMask,
+      crc: args.crc,
+      crcOk: args.crcOk,
+      so2Ppb,
+      no2Ppb,
+      o3Ppb,
+      coPpb,
+      temperatureC,
+      humidityRh,
+      pm1p0,
+      pm2p5,
+      pm10,
     };
 
     return await ctx.db.insert("readings", doc);

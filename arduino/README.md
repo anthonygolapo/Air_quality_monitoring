@@ -1,4 +1,29 @@
-# ESP32 Receiver
+# ESP32 Arduino Sketches
+
+## Transmitter
+
+Use [esp32_s3_aiqumo_lora_transmitter/esp32_s3_aiqumo_lora_transmitter.ino](C:/Users/ENVI-COMM/Desktop/Airquality/arduino/esp32_s3_aiqumo_lora_transmitter/esp32_s3_aiqumo_lora_transmitter.ino:1) on your ESP32-S3 AiQuMo LoRa transmitter node.
+
+This sketch:
+
+- wakes every 60 seconds
+- reads CO, O3, NO2, SO2, SPS30 PM, and averaged DGS2 temperature/RH
+- builds one fixed CSV packet with a validity mask and CRC
+- transmits over SX1276 LoRa
+- puts LoRa and ESP32 back to sleep
+
+Install these Arduino libraries before uploading:
+
+- `LoRa`
+- `Sensirion I2C SPS30`
+- Built-in ESP32 `SPI`
+- Built-in ESP32 `Wire`
+
+Important transmitter note:
+
+- The DGS2 single-measurement command is currently set to `"\r"` in the sketch because that is the command pattern already present in the local hardware notes. If your DGS2 firmware expects a different trigger command, update `DGS2_SINGLE_MEASUREMENT_COMMAND` before uploading.
+
+## Receiver
 
 Use [esp32_lora_receiver_to_convex/esp32_lora_receiver_to_convex.ino](C:/Users/ENVI-COMM/Desktop/Airquality/arduino/esp32_lora_receiver_to_convex/esp32_lora_receiver_to_convex.ino:1) on the ESP32 that receives LoRa and forwards packets to Convex over Wi-Fi.
 

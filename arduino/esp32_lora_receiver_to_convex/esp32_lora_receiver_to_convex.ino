@@ -25,6 +25,7 @@ constexpr int LORA_SYNC_WORD = 0x12;
 constexpr uint32_t WIFI_RETRY_MS = 500;
 constexpr uint32_t WIFI_TIMEOUT_MS = 20000;
 constexpr uint32_t HTTP_TIMEOUT_MS = 15000;
+constexpr size_t EXPECTED_PACKET_FIELDS = 13;
 
 String escapeJson(const String& input) {
   String output;
@@ -109,6 +110,79 @@ bool isNumericString(const String& s) {
   return hasDigit;
 }
 
+bool appendNumericJsonField(String& body, const char* key, const String& rawValue) {
+  if (!isNumericString(rawValue)) {
+    return false;
+  }
+
+  body += ",\"";
+  body += key;
+  body += "\":";
+  body += rawValue;
+  return true;
+}
+
+String toUpperTrimmed(String value) {
+  value.trim();
+  value.toUpperCase();
+  return value;
+}
+
+uint16_t calculateCRC(const String& payloadWithoutCRC) {
+  uint16_t crc = 0xFFFF;
+
+  for (size_t i = 0; i < payloadWithoutCRC.length(); i++) {
+    crc ^= static_cast<uint16_t>(payloadWithoutCRC[i]) << 8;
+
+    for (uint8_t bit = 0; bit < 8; bit++) {
+      if (crc & 0x8000) {
+        crc = static_cast<uint16_t>((crc << 1) ^ 0x1021);
+      } else {
+        crc <<= 1;
+      }
+    }
+  }
+
+  return crc;
+}
+
+String crcToHex(uint16_t crc) {
+  char buffer[5];
+  snprintf(buffer, sizeof(buffer), "%04X", crc);
+  return String(buffer);
+}
+
+String joinFields(const String fields[], size_t count) {
+  String joined;
+
+  for (size_t i = 0; i < count; i++) {
+    if (i > 0) {
+      joined += ",";
+    }
+    joined += fields[i];
+  }
+
+  return joined;
+}
+
+bool isHexCrc(const String& value) {
+  if (value.length() != 4) {
+    return false;
+  }
+
+  for (size_t i = 0; i < value.length(); i++) {
+    char c = value[i];
+    bool ok = (c >= '0' && c <= '9') ||
+              (c >= 'A' && c <= 'F') ||
+              (c >= 'a' && c <= 'f');
+    if (!ok) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
 bool ensureWiFi() {
   if (WiFi.status() == WL_CONNECTED) {
     return true;
@@ -179,13 +253,35 @@ String buildRequestBody(const String& rawPayload, int rssi, float snr) {
   body += ",\"snr\":" + String(snr, 2);
 
   if (splitCsvLine(rawPayload, fields, 16, fieldCount) &&
-      fieldCount >= 3 &&
-      fields[0] == "ENV1") {
-    body += ",\"nodeId\":\"" + escapeJson(fields[1]) + "\"";
+      fieldCount == EXPECTED_PACKET_FIELDS) {
+    String payloadWithoutCrc = joinFields(fields, EXPECTED_PACKET_FIELDS - 1);
+    String calculatedCrc = crcToHex(calculateCRC(payloadWithoutCrc));
+    String receivedCrc = toUpperTrimmed(fields[12]);
+    bool crcOk = isHexCrc(receivedCrc) && receivedCrc == calculatedCrc;
 
-    if (isNumericString(fields[2])) {
-      body += ",\"sequence\":" + fields[2];
+    body += ",\"deviceId\":\"" + escapeJson(fields[0]) + "\"";
+
+    if (isNumericString(fields[1])) {
+      body += ",\"sequence\":" + fields[1];
     }
+
+    if (isNumericString(fields[11])) {
+      body += ",\"validityMask\":" + fields[11];
+    }
+
+    appendNumericJsonField(body, "coPpb", fields[2]);
+    appendNumericJsonField(body, "o3Ppb", fields[3]);
+    appendNumericJsonField(body, "no2Ppb", fields[4]);
+    appendNumericJsonField(body, "so2Ppb", fields[5]);
+    appendNumericJsonField(body, "pm1_0", fields[6]);
+    appendNumericJsonField(body, "pm2_5", fields[7]);
+    appendNumericJsonField(body, "pm10", fields[8]);
+    appendNumericJsonField(body, "temperatureC", fields[9]);
+    appendNumericJsonField(body, "humidityPercent", fields[10]);
+
+    body += ",\"crc\":\"" + escapeJson(receivedCrc) + "\"";
+    body += ",\"crcOk\":";
+    body += crcOk ? "true" : "false";
   }
 
   body += "}";
@@ -277,6 +373,47 @@ void loop() {
   Serial.println(rssi);
   Serial.print("[LORA] SNR: ");
   Serial.println(snr, 2);
+
+  String fields[16];
+  size_t fieldCount = 0;
+  if (splitCsvLine(payload, fields, 16, fieldCount) && fieldCount == EXPECTED_PACKET_FIELDS) {
+    String payloadWithoutCrc = joinFields(fields, EXPECTED_PACKET_FIELDS - 1);
+    String calculatedCrc = crcToHex(calculateCRC(payloadWithoutCrc));
+    String receivedCrc = toUpperTrimmed(fields[12]);
+
+    Serial.print("[LORA] Device ID: ");
+    Serial.println(fields[0]);
+    Serial.print("[LORA] Sequence: ");
+    Serial.println(fields[1]);
+    Serial.print("[LORA] Validity mask: ");
+    Serial.println(fields[11]);
+    Serial.print("[LORA] CO ppb: ");
+    Serial.println(fields[2]);
+    Serial.print("[LORA] O3 ppb: ");
+    Serial.println(fields[3]);
+    Serial.print("[LORA] NO2 ppb: ");
+    Serial.println(fields[4]);
+    Serial.print("[LORA] SO2 ppb: ");
+    Serial.println(fields[5]);
+    Serial.print("[LORA] PM1.0: ");
+    Serial.println(fields[6]);
+    Serial.print("[LORA] PM2.5: ");
+    Serial.println(fields[7]);
+    Serial.print("[LORA] PM10: ");
+    Serial.println(fields[8]);
+    Serial.print("[LORA] Temperature C: ");
+    Serial.println(fields[9]);
+    Serial.print("[LORA] Humidity %: ");
+    Serial.println(fields[10]);
+    Serial.print("[LORA] CRC received: ");
+    Serial.println(receivedCrc);
+    Serial.print("[LORA] CRC calculated: ");
+    Serial.println(calculatedCrc);
+    Serial.print("[LORA] CRC result: ");
+    Serial.println((isHexCrc(receivedCrc) && receivedCrc == calculatedCrc) ? "PASS" : "FAIL");
+  } else {
+    Serial.println("[LORA] Packet format does not match current transmitter layout.");
+  }
 
   if (payload.length() == 0) {
     Serial.println("[LORA] Empty payload skipped.");

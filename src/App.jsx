@@ -1145,6 +1145,18 @@ export default function App() {
               <dd>{latest?.status ?? "--"}</dd>
             </div>
             <div>
+              <dt>Validity mask</dt>
+              <dd>{latest?.validityMask ?? "--"}</dd>
+            </div>
+            <div>
+              <dt>CRC</dt>
+              <dd>{latest?.crc ?? "--"}</dd>
+            </div>
+            <div>
+              <dt>CRC check</dt>
+              <dd>{latest?.crcOk === undefined ? "--" : latest.crcOk ? "PASS" : "FAIL"}</dd>
+            </div>
+            <div>
               <dt>Raw payload</dt>
               <dd className="payload">{latest?.rawPayload ?? "--"}</dd>
             </div>
