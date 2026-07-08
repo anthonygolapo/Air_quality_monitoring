@@ -33,11 +33,17 @@ const stabilityConfig = [
     label: "NO2",
     unit: "ppb",
     mode: "dgs2",
-    minPoints: 4,
+    minPoints: 30,
     minWindowMs: 30 * 60 * 1000,
     targetWindowMs: 60 * 60 * 1000,
-    goodThreshold: 30,
-    acceptableThreshold: 60,
+    quickEstimatePoints: 10,
+    quickEstimateWindowMs: 10 * 60 * 1000,
+    strongPoints: 45,
+    strongWindowMs: 45 * 60 * 1000,
+    stableBand: 60,
+    minStableRatio: 0.8,
+    staleAfterMs: 3 * 60 * 1000,
+    slopeThresholdPerHour: 60,
     healthAverageWindowMs: 60 * 60 * 1000,
     healthBreakpoints: [
       { label: "Good", max: 53, tone: "good" },
@@ -52,11 +58,17 @@ const stabilityConfig = [
     label: "SO2",
     unit: "ppb",
     mode: "dgs2",
-    minPoints: 4,
+    minPoints: 30,
     minWindowMs: 30 * 60 * 1000,
     targetWindowMs: 60 * 60 * 1000,
-    goodThreshold: 30,
-    acceptableThreshold: 60,
+    quickEstimatePoints: 10,
+    quickEstimateWindowMs: 10 * 60 * 1000,
+    strongPoints: 45,
+    strongWindowMs: 45 * 60 * 1000,
+    stableBand: 60,
+    minStableRatio: 0.8,
+    staleAfterMs: 3 * 60 * 1000,
+    slopeThresholdPerHour: 60,
     healthAverageWindowMs: 60 * 60 * 1000,
     healthBreakpoints: [
       { label: "Good", max: 35, tone: "good" },
@@ -71,11 +83,17 @@ const stabilityConfig = [
     label: "CO",
     unit: "ppb",
     mode: "dgs2",
-    minPoints: 4,
+    minPoints: 30,
     minWindowMs: 30 * 60 * 1000,
     targetWindowMs: 60 * 60 * 1000,
-    goodThreshold: 200,
-    acceptableThreshold: 400,
+    quickEstimatePoints: 10,
+    quickEstimateWindowMs: 10 * 60 * 1000,
+    strongPoints: 45,
+    strongWindowMs: 45 * 60 * 1000,
+    stableBand: 400,
+    minStableRatio: 0.8,
+    staleAfterMs: 3 * 60 * 1000,
+    slopeThresholdPerHour: 400,
     healthAverageWindowMs: 8 * 60 * 60 * 1000,
     healthBreakpoints: [
       { label: "Good", max: 4400, tone: "good" },
@@ -90,11 +108,17 @@ const stabilityConfig = [
     label: "O3",
     unit: "ppb",
     mode: "dgs2",
-    minPoints: 4,
+    minPoints: 30,
     minWindowMs: 30 * 60 * 1000,
     targetWindowMs: 60 * 60 * 1000,
-    goodThreshold: 20,
-    acceptableThreshold: 40,
+    quickEstimatePoints: 10,
+    quickEstimateWindowMs: 10 * 60 * 1000,
+    strongPoints: 45,
+    strongWindowMs: 45 * 60 * 1000,
+    stableBand: 40,
+    minStableRatio: 0.8,
+    staleAfterMs: 3 * 60 * 1000,
+    slopeThresholdPerHour: 40,
     healthAverageWindowMs: 8 * 60 * 60 * 1000,
     healthBreakpoints: [
       { label: "Good", max: 54, tone: "good" },
@@ -308,6 +332,41 @@ function averageAbsoluteGap(values) {
   return total / (values.length - 1);
 }
 
+function median(values) {
+  if (!values.length) {
+    return null;
+  }
+
+  const sorted = [...values].sort((a, b) => a - b);
+  const middle = Math.floor(sorted.length / 2);
+  return sorted.length % 2 === 0
+    ? (sorted[middle - 1] + sorted[middle]) / 2
+    : sorted[middle];
+}
+
+function slopePerHour(samples, key) {
+  if (samples.length < 2) {
+    return 0;
+  }
+
+  const points = samples.map((reading) => ({
+    x: ((reading.capturedAt ?? reading._creationTime) - (samples[0].capturedAt ?? samples[0]._creationTime)) / 3600000,
+    y: Number(reading[key]),
+  }));
+
+  const meanX = average(points.map((point) => point.x)) ?? 0;
+  const meanY = average(points.map((point) => point.y)) ?? 0;
+
+  let numerator = 0;
+  let denominator = 0;
+  for (const point of points) {
+    numerator += (point.x - meanX) * (point.y - meanY);
+    denominator += (point.x - meanX) * (point.x - meanX);
+  }
+
+  return denominator === 0 ? 0 : numerator / denominator;
+}
+
 function computeHealthStatus(readings, config) {
   if (!config.healthAverageWindowMs || !config.healthBreakpoints) {
     return null;
@@ -390,6 +449,21 @@ function computeStability(readings, config) {
       };
     }
 
+    if (Date.now() - latestTimestamp > config.staleAfterMs) {
+      const health = computeHealthStatus(readings, config);
+      return {
+        ...config,
+        stable: false,
+        level: "warming",
+        reason: "No Recent Data",
+        detail: "No valid packet in the last 3 minutes",
+        health,
+        spread: null,
+        since: null,
+        latest: null,
+      };
+    }
+
     const samples = validSamples.filter((reading) => {
       const timestamp = reading.capturedAt ?? reading._creationTime;
       return latestTimestamp - timestamp <= config.targetWindowMs;
@@ -400,21 +474,22 @@ function computeStability(readings, config) {
       (samples[0]?.capturedAt ?? samples[0]?._creationTime ?? latestTimestamp);
 
     if (samples.length < config.minPoints || windowDuration < config.minWindowMs) {
-      const reasons = [];
-      if (samples.length < config.minPoints) {
-        reasons.push(`${samples.length}/${config.minPoints} valid readings`);
-      }
-      if (windowDuration < config.minWindowMs) {
-        reasons.push(`${Math.round(windowDuration / 60000)} of 30 min covered`);
+      const health = computeHealthStatus(readings, config);
+      let reason = "Insufficient Data";
+      if (samples.length >= config.quickEstimatePoints && windowDuration >= config.quickEstimateWindowMs) {
+        reason = "Quick estimate";
       }
 
-      const health = computeHealthStatus(readings, config);
+      if (samples.length < config.quickEstimatePoints || windowDuration < config.quickEstimateWindowMs) {
+        reason = "Insufficient Data";
+      }
+
       return {
         ...config,
         stable: false,
         level: "warming",
-        reason: "Not enough 30-60 minute history yet",
-        detail: reasons.join(", "),
+        reason,
+        detail: `${samples.length} valid packets over ${Math.round(windowDuration / 60000)} min. Need at least ${config.minPoints} packets over 30 min.`,
         health,
         spread: null,
         since: samples[0]?.capturedAt ?? samples[0]?._creationTime ?? null,
@@ -424,33 +499,26 @@ function computeStability(readings, config) {
 
     const values = samples.map((reading) => Number(reading[config.key]));
     const avg = average(values);
+    const medianValue = median(values) ?? 0;
     const spread = Math.max(...values) - Math.min(...values);
     const drift = Math.abs(values[values.length - 1] - values[0]);
     const avgGap = averageAbsoluteGap(values) ?? 0;
-    const maxMetric = Math.max(spread, drift, avgGap);
     const since = samples[0].capturedAt ?? samples[0]._creationTime;
     const health = computeHealthStatus(readings, config);
+    const withinBandCount = values.filter((value) => Math.abs(value - medianValue) <= config.stableBand).length;
+    const stableRatio = withinBandCount / values.length;
+    const slope = slopePerHour(samples, config.key);
+    const drifting = Math.abs(slope) > config.slopeThresholdPerHour;
+    const noisy = stableRatio < config.minStableRatio || spread > config.stableBand * 2 || avgGap > config.stableBand;
+    const strongWindow = samples.length >= config.strongPoints && windowDuration >= config.strongWindowMs;
 
-    let blockingMetric = "spread";
-    let blockingValue = spread;
-
-    if (drift >= blockingValue) {
-      blockingMetric = "drift";
-      blockingValue = drift;
-    }
-
-    if (avgGap >= blockingValue) {
-      blockingMetric = "avg gap";
-      blockingValue = avgGap;
-    }
-
-    if (maxMetric <= config.goodThreshold) {
+    if (!drifting && !noisy) {
       return {
         ...config,
         stable: true,
         level: "good",
-        reason: `Good clean-air stability over ${Math.round(windowDuration / 60000)} min`,
-        detail: `avg ${avg.toFixed(1)}, avg gap ${avgGap.toFixed(1)}, drift ${drift.toFixed(1)}, spread ${spread.toFixed(1)} ${config.unit}`,
+        reason: "Stable",
+        detail: `${strongWindow ? "Strong" : "Acceptable"} stability: ${samples.length} packets over ${Math.round(windowDuration / 60000)} min, ${(stableRatio * 100).toFixed(0)}% within +/-${config.stableBand} ${config.unit} of median ${medianValue.toFixed(1)}, slope ${slope.toFixed(1)} ${config.unit}/h.`,
         health,
         spread,
         since,
@@ -458,13 +526,13 @@ function computeStability(readings, config) {
       };
     }
 
-    if (maxMetric <= config.acceptableThreshold) {
+    if (drifting) {
       return {
         ...config,
-        stable: true,
-        level: "acceptable",
-        reason: `Acceptable clean-air stability over ${Math.round(windowDuration / 60000)} min`,
-        detail: `avg ${avg.toFixed(1)}, avg gap ${avgGap.toFixed(1)}, drift ${drift.toFixed(1)}, spread ${spread.toFixed(1)} ${config.unit}`,
+        stable: false,
+        level: "warming",
+        reason: "Drifting",
+        detail: `Slope ${slope.toFixed(1)} ${config.unit}/h is above the allowed ${config.slopeThresholdPerHour} ${config.unit}/h. Median ${medianValue.toFixed(1)}, avg ${avg.toFixed(1)}, drift ${drift.toFixed(1)}.`,
         health,
         spread,
         since,
@@ -476,8 +544,8 @@ function computeStability(readings, config) {
       ...config,
       stable: false,
       level: "warming",
-      reason: `Still stabilizing over ${Math.round(windowDuration / 60000)} min`,
-      detail: `${blockingMetric} ${blockingValue.toFixed(1)} ${config.unit} is above acceptable ${config.acceptableThreshold} ${config.unit}. avg ${avg.toFixed(1)}, avg gap ${avgGap.toFixed(1)}, drift ${drift.toFixed(1)}, spread ${spread.toFixed(1)}`,
+      reason: "Noisy",
+      detail: `${(stableRatio * 100).toFixed(0)}% of packets are within +/-${config.stableBand} ${config.unit} of median ${medianValue.toFixed(1)}. Spread ${spread.toFixed(1)}, avg gap ${avgGap.toFixed(1)}, drift ${drift.toFixed(1)} ${config.unit}.`,
       health,
       spread,
       since,
