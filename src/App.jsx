@@ -354,6 +354,236 @@ function median(values) {
     : sorted[middle];
 }
 
+function getDGS2Threshold(sensorType) {
+  switch (sensorType) {
+    case "CO":
+      return 400;
+    case "O3":
+      return 40;
+    case "NO2":
+      return 60;
+    case "SO2":
+      return 60;
+    default:
+      return 60;
+  }
+}
+
+function filterRecentValidReadings(readings, now, windowMinutes, key) {
+  const windowMs = windowMinutes * 60 * 1000;
+  return (readings ?? []).filter((reading) => {
+    const value = reading[key];
+    const timestamp = reading.capturedAt ?? reading._creationTime;
+    return (
+      value !== null &&
+      value !== undefined &&
+      !Number.isNaN(value) &&
+      Number.isFinite(Number(value)) &&
+      now - timestamp <= windowMs
+    );
+  });
+}
+
+function calculateMedian(values) {
+  return median(values);
+}
+
+function calculateSlopePpbPerHour(readings, key) {
+  return slopePerHour(readings, key);
+}
+
+function calculateWithinBandRatio(readings, baselineMedian, threshold, key) {
+  if (!readings.length) {
+    return null;
+  }
+
+  const withinBandCount = readings.filter(
+    (reading) => Math.abs(Number(reading[key]) - baselineMedian) <= threshold,
+  ).length;
+  return withinBandCount / readings.length;
+}
+
+function computeDGS2SensorStatus(sensorType, readings, now, key) {
+  const threshold = getDGS2Threshold(sensorType);
+  const recentReadings = filterRecentValidReadings(readings, now, 60, key);
+  const latestReading = recentReadings.at(-1) ?? null;
+  const latestTimestamp = latestReading ? latestReading.capturedAt ?? latestReading._creationTime : null;
+
+  if (!latestTimestamp || now - latestTimestamp > 3 * 60 * 1000) {
+    return {
+      sensorStatus: "No Recent Data",
+      latestValue: latestReading ? Number(latestReading[key]) : null,
+      rollingMedian: null,
+      threshold,
+      slopePpbPerHour: null,
+      validPacketCount: recentReadings.length,
+      timeCoverageMinutes: 0,
+      withinBandRatio: null,
+      note: "Latest valid packet is older than 3 minutes.",
+    };
+  }
+
+  const values = recentReadings.map((reading) => Number(reading[key]));
+  const rollingMedian = calculateMedian(values);
+  const firstTimestamp = recentReadings[0].capturedAt ?? recentReadings[0]._creationTime;
+  const timeCoverageMinutes = Math.max(0, Math.round((latestTimestamp - firstTimestamp) / 60000));
+
+  if (recentReadings.length < 30 || timeCoverageMinutes < 30) {
+    return {
+      sensorStatus: "Insufficient Data",
+      latestValue: Number(latestReading[key]),
+      rollingMedian,
+      threshold,
+      slopePpbPerHour: calculateSlopePpbPerHour(recentReadings, key),
+      validPacketCount: recentReadings.length,
+      timeCoverageMinutes,
+      withinBandRatio: calculateWithinBandRatio(recentReadings, rollingMedian, threshold, key),
+      note: "Need at least 30 valid packets and 30 minutes of history.",
+    };
+  }
+
+  const slopePpbPerHour = calculateSlopePpbPerHour(recentReadings, key);
+  const withinBandRatio = calculateWithinBandRatio(recentReadings, rollingMedian, threshold, key);
+  const valuesRange = Math.max(...values) - Math.min(...values);
+  const invalidRatio = (readings ?? []).length > 0 ? 1 - recentReadings.length / (readings ?? []).length : 0;
+
+  if (invalidRatio > 0.5) {
+    return {
+      sensorStatus: "Invalid Data",
+      latestValue: Number(latestReading[key]),
+      rollingMedian,
+      threshold,
+      slopePpbPerHour,
+      validPacketCount: recentReadings.length,
+      timeCoverageMinutes,
+      withinBandRatio,
+      note: "Invalid or missing packets dominate the recent window.",
+    };
+  }
+
+  if (Math.abs(slopePpbPerHour) > threshold) {
+    return {
+      sensorStatus: "Drifting",
+      latestValue: Number(latestReading[key]),
+      rollingMedian,
+      threshold,
+      slopePpbPerHour,
+      validPacketCount: recentReadings.length,
+      timeCoverageMinutes,
+      withinBandRatio,
+      note: `Slope ${slopePpbPerHour.toFixed(1)} ppb/h is high across the full window.`,
+    };
+  }
+
+  if ((withinBandRatio ?? 0) < 0.8 && valuesRange > threshold * 2) {
+    return {
+      sensorStatus: "Noisy",
+      latestValue: Number(latestReading[key]),
+      rollingMedian,
+      threshold,
+      slopePpbPerHour,
+      validPacketCount: recentReadings.length,
+      timeCoverageMinutes,
+      withinBandRatio,
+      note: "Readings repeatedly break the expected noise band around the rolling median.",
+    };
+  }
+
+  return {
+    sensorStatus: "Stable",
+    latestValue: Number(latestReading[key]),
+    rollingMedian,
+    threshold,
+    slopePpbPerHour,
+    validPacketCount: recentReadings.length,
+    timeCoverageMinutes,
+    withinBandRatio,
+    note: "Recent packets are technically consistent. Stability does not prove accuracy.",
+  };
+}
+
+function computeDGS2GasEventStatus(sensorType, readings, now, key) {
+  const threshold = getDGS2Threshold(sensorType);
+  const recentReadings = filterRecentValidReadings(readings, now, 60, key);
+  const values = recentReadings.map((reading) => Number(reading[key]));
+  const baseline = calculateMedian(values);
+  const latestValue = values.at(-1) ?? null;
+
+  if (baseline === null || latestValue === null) {
+    return {
+      gasEventStatus: "Normal",
+      latestValue,
+      rollingMedian: baseline,
+      threshold,
+      slopePpbPerHour: null,
+      validPacketCount: recentReadings.length,
+      timeCoverageMinutes: 0,
+      withinBandRatio: null,
+      note: "Waiting for enough valid readings to evaluate gas events.",
+    };
+  }
+
+  const slopePpbPerHour = calculateSlopePpbPerHour(recentReadings, key);
+  const latestDeviation = latestValue - baseline;
+  const consecutiveAboveThreshold = [...recentReadings]
+    .reverse()
+    .findIndex((reading) => Number(reading[key]) - baseline <= threshold);
+  const aboveCount =
+    consecutiveAboveThreshold === -1 ? recentReadings.length : consecutiveAboveThreshold;
+
+  let gasEventStatus = "Normal";
+  if (latestDeviation > threshold && aboveCount >= 2) {
+    gasEventStatus = "Gas Event Detected";
+  } else if (latestDeviation > threshold) {
+    gasEventStatus = "Possible Gas Event";
+  } else if (slopePpbPerHour > threshold / 2) {
+    gasEventStatus = "Increasing";
+  } else if (slopePpbPerHour < -threshold / 2) {
+    gasEventStatus = "Decreasing";
+  }
+
+  const firstTimestamp = recentReadings[0]?.capturedAt ?? recentReadings[0]?._creationTime ?? now;
+  return {
+    gasEventStatus,
+    latestValue,
+    rollingMedian: baseline,
+    threshold,
+    slopePpbPerHour,
+    validPacketCount: recentReadings.length,
+    timeCoverageMinutes: Math.max(0, Math.round((now - firstTimestamp) / 60000)),
+    withinBandRatio: calculateWithinBandRatio(recentReadings, baseline, threshold, key),
+    note:
+      gasEventStatus === "Gas Event Detected"
+        ? `Latest readings stayed above the rolling median by more than ${threshold} ppb for multiple packets.`
+        : gasEventStatus === "Possible Gas Event"
+          ? `Latest reading exceeded the rolling median by more than ${threshold} ppb.`
+          : gasEventStatus === "Increasing"
+            ? "Readings are rising gradually relative to the recent baseline."
+            : gasEventStatus === "Decreasing"
+              ? "Readings are falling relative to the recent baseline."
+              : "No major gas event is indicated relative to the rolling median.",
+  };
+}
+
+function computeDGS2DashboardStatus(sensorType, readings, now, key) {
+  const sensorStatus = computeDGS2SensorStatus(sensorType, readings, now, key);
+  const gasEventStatus = computeDGS2GasEventStatus(sensorType, readings, now, key);
+
+  return {
+    sensorType,
+    sensorStatus: sensorStatus.sensorStatus,
+    gasEventStatus: gasEventStatus.gasEventStatus,
+    latestValue: sensorStatus.latestValue ?? gasEventStatus.latestValue,
+    rollingMedian: sensorStatus.rollingMedian ?? gasEventStatus.rollingMedian,
+    threshold: sensorStatus.threshold,
+    slopePpbPerHour: sensorStatus.slopePpbPerHour ?? gasEventStatus.slopePpbPerHour,
+    validPacketCount: sensorStatus.validPacketCount,
+    timeCoverageMinutes: sensorStatus.timeCoverageMinutes,
+    withinBandRatio: sensorStatus.withinBandRatio,
+    note: `${sensorStatus.note} ${gasEventStatus.note}`.trim(),
+  };
+}
+
 function slopePerHour(samples, key) {
   if (samples.length < 2) {
     return 0;
@@ -437,129 +667,34 @@ function computeHealthStatus(readings, config) {
 
 function computeStability(readings, config) {
   if (config.mode === "dgs2") {
-    const validSamples = (readings ?? []).filter(
-      (reading) => reading[config.key] !== null && reading[config.key] !== undefined,
-    );
-    const latestTimestamp = validSamples.length
-      ? validSamples[validSamples.length - 1].capturedAt ?? validSamples[validSamples.length - 1]._creationTime
-      : null;
-
-    if (!latestTimestamp) {
-      const health = computeHealthStatus(readings, config);
-      return {
-        ...config,
-        stable: false,
-        level: "warming",
-        reason: "No readings yet",
-        detail: "Waiting for the first packet",
-        health,
-        spread: null,
-        since: null,
-        latest: null,
-      };
-    }
-
-    if (Date.now() - latestTimestamp > config.staleAfterMs) {
-      const health = computeHealthStatus(readings, config);
-      return {
-        ...config,
-        stable: false,
-        level: "warming",
-        reason: "No Recent Data",
-        detail: "No valid packet in the last 3 minutes",
-        health,
-        spread: null,
-        since: null,
-        latest: null,
-      };
-    }
-
-    const samples = validSamples.filter((reading) => {
-      const timestamp = reading.capturedAt ?? reading._creationTime;
-      return latestTimestamp - timestamp <= config.targetWindowMs;
-    });
-
-    const windowDuration =
-      (samples.at(-1)?.capturedAt ?? samples.at(-1)?._creationTime ?? latestTimestamp) -
-      (samples[0]?.capturedAt ?? samples[0]?._creationTime ?? latestTimestamp);
-
-    if (samples.length < config.minPoints || windowDuration < config.minWindowMs) {
-      const health = computeHealthStatus(readings, config);
-      let reason = "Insufficient Data";
-      if (samples.length >= config.quickEstimatePoints && windowDuration >= config.quickEstimateWindowMs) {
-        reason = "Quick estimate";
-      }
-
-      if (samples.length < config.quickEstimatePoints || windowDuration < config.quickEstimateWindowMs) {
-        reason = "Insufficient Data";
-      }
-
-      return {
-        ...config,
-        stable: false,
-        level: "warming",
-        reason,
-        detail: `${samples.length} valid packets over ${Math.round(windowDuration / 60000)} min. Need at least ${config.minPoints} packets over 30 min.`,
-        health,
-        spread: null,
-        since: samples[0]?.capturedAt ?? samples[0]?._creationTime ?? null,
-        latest: samples.at(-1)?.[config.key] ?? null,
-      };
-    }
-
-    const values = samples.map((reading) => Number(reading[config.key]));
-    const avg = average(values);
-    const medianValue = median(values) ?? 0;
-    const spread = Math.max(...values) - Math.min(...values);
-    const drift = Math.abs(values[values.length - 1] - values[0]);
-    const avgGap = averageAbsoluteGap(values) ?? 0;
-    const since = samples[0].capturedAt ?? samples[0]._creationTime;
+    const dashboardStatus = computeDGS2DashboardStatus(config.label, readings, Date.now(), config.key);
     const health = computeHealthStatus(readings, config);
-    const withinBandCount = values.filter((value) => Math.abs(value - medianValue) <= config.stableBand).length;
-    const stableRatio = withinBandCount / values.length;
-    const slope = slopePerHour(samples, config.key);
-    const drifting = Math.abs(slope) > config.slopeThresholdPerHour;
-    const noisy = stableRatio < config.minStableRatio || spread > config.stableBand * 2 || avgGap > config.stableBand;
-    const strongWindow = samples.length >= config.strongPoints && windowDuration >= config.strongWindowMs;
-
-    if (!drifting && !noisy) {
-      return {
-        ...config,
-        stable: true,
-        level: "good",
-        reason: "Stable",
-        detail: `${strongWindow ? "Strong" : "Acceptable"} stability: ${samples.length} packets over ${Math.round(windowDuration / 60000)} min, ${(stableRatio * 100).toFixed(0)}% within +/-${config.stableBand} ${config.unit} of median ${medianValue.toFixed(1)}, slope ${slope.toFixed(1)} ${config.unit}/h.`,
-        health,
-        spread,
-        since,
-        latest: values.at(-1) ?? null,
-      };
-    }
-
-    if (drifting) {
-      return {
-        ...config,
-        stable: false,
-        level: "warming",
-        reason: "Drifting",
-        detail: `Slope ${slope.toFixed(1)} ${config.unit}/h is above the allowed ${config.slopeThresholdPerHour} ${config.unit}/h. Median ${medianValue.toFixed(1)}, avg ${avg.toFixed(1)}, drift ${drift.toFixed(1)}.`,
-        health,
-        spread,
-        since,
-        latest: values.at(-1) ?? null,
-      };
-    }
+    const sensorStatusTone =
+      dashboardStatus.sensorStatus === "Stable"
+        ? "good"
+        : dashboardStatus.sensorStatus === "Insufficient Data" || dashboardStatus.sensorStatus === "No Recent Data"
+          ? "acceptable"
+          : "warming";
 
     return {
       ...config,
-      stable: false,
-      level: "warming",
-      reason: "Noisy",
-      detail: `${(stableRatio * 100).toFixed(0)}% of packets are within +/-${config.stableBand} ${config.unit} of median ${medianValue.toFixed(1)}. Spread ${spread.toFixed(1)}, avg gap ${avgGap.toFixed(1)}, drift ${drift.toFixed(1)} ${config.unit}.`,
+      stable: dashboardStatus.sensorStatus === "Stable",
+      level: sensorStatusTone,
+      reason: `Sensor Status: ${dashboardStatus.sensorStatus}`,
+      detail: `Gas Event Status: ${dashboardStatus.gasEventStatus}. Median ${formatCompactValue(dashboardStatus.rollingMedian)} ${config.unit}, threshold ${dashboardStatus.threshold} ${config.unit}, slope ${dashboardStatus.slopePpbPerHour === null ? "--" : dashboardStatus.slopePpbPerHour.toFixed(1)} ppb/h, ${(dashboardStatus.withinBandRatio ?? 0) * 100}% within band.`,
       health,
-      spread,
-      since,
-      latest: values.at(-1) ?? null,
+      spread: dashboardStatus.withinBandRatio,
+      since: dashboardStatus.validPacketCount > 0 ? Date.now() - dashboardStatus.timeCoverageMinutes * 60000 : null,
+      latest: dashboardStatus.latestValue,
+      sensorStatus: dashboardStatus.sensorStatus,
+      gasEventStatus: dashboardStatus.gasEventStatus,
+      note: dashboardStatus.note,
+      validPacketCount: dashboardStatus.validPacketCount,
+      timeCoverageMinutes: dashboardStatus.timeCoverageMinutes,
+      threshold: dashboardStatus.threshold,
+      rollingMedian: dashboardStatus.rollingMedian,
+      slopePpbPerHour: dashboardStatus.slopePpbPerHour,
+      withinBandRatio: dashboardStatus.withinBandRatio,
     };
   }
 
@@ -989,11 +1124,13 @@ function StabilityPanel({ readings }) {
                       : "warming"
                 }`}
               >
-                {summary.level === "good"
-                  ? "Good"
-                  : summary.level === "acceptable"
-                    ? "Acceptable"
-                    : "Stabilizing"}
+                {summary.mode === "dgs2"
+                  ? summary.sensorStatus ?? "Sensor Status"
+                  : summary.level === "good"
+                    ? "Good"
+                    : summary.level === "acceptable"
+                      ? "Acceptable"
+                      : "Stabilizing"}
               </span>
             </div>
             <p className="stability-reading">
@@ -1001,10 +1138,24 @@ function StabilityPanel({ readings }) {
             </p>
             <p className="stability-text">{summary.reason}</p>
             <p className="stability-text secondary">{summary.detail}</p>
+            {summary.mode === "dgs2" ? (
+              <>
+                <p className="stability-text secondary">
+                  Gas Event Status: {summary.gasEventStatus ?? "--"}
+                </p>
+                <p className="stability-text secondary">
+                  {summary.validPacketCount ?? 0} valid packets over {summary.timeCoverageMinutes ?? 0} min. {summary.note}
+                </p>
+              </>
+            ) : null}
             {summary.health ? (
               <div className={`air-status air-${summary.health.tone}`}>
                 <p className="air-status-label">
-                  {summary.stable ? "Air range" : "Air range (wait for stability)"}
+                  {summary.mode === "dgs2"
+                    ? "Air Quality Status"
+                    : summary.stable
+                      ? "Air range"
+                      : "Air range (wait for stability)"}
                 </p>
                 <p className="air-status-value">{summary.health.label}</p>
                 <p className="air-status-detail">
