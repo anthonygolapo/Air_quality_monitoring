@@ -132,9 +132,14 @@ const stabilityConfig = [
     key: "pm2p5",
     label: "PM2.5",
     unit: "ug/m3",
-    mode: "basic",
-    minPoints: 4,
-    tolerance: 8,
+    mode: "sps30",
+    minPoints: 30,
+    minWindowMs: 30 * 60 * 1000,
+    targetWindowMs: 60 * 60 * 1000,
+    staleAfterMs: 3 * 60 * 1000,
+    trendWindowMs: 15 * 60 * 1000,
+    trendAbsoluteThreshold: 10,
+    trendRelativeThreshold: 0.5,
     healthAverageWindowMs: 24 * 60 * 60 * 1000,
     healthBreakpoints: [
       { label: "Good", max: 9.0, tone: "good" },
@@ -148,9 +153,14 @@ const stabilityConfig = [
     key: "pm10",
     label: "PM10",
     unit: "ug/m3",
-    mode: "basic",
-    minPoints: 4,
-    tolerance: 15,
+    mode: "sps30",
+    minPoints: 30,
+    minWindowMs: 30 * 60 * 1000,
+    targetWindowMs: 60 * 60 * 1000,
+    staleAfterMs: 3 * 60 * 1000,
+    trendWindowMs: 15 * 60 * 1000,
+    trendAbsoluteThreshold: 25,
+    trendRelativeThreshold: 0.5,
     healthAverageWindowMs: 24 * 60 * 60 * 1000,
     healthBreakpoints: [
       { label: "Good", max: 54, tone: "good" },
@@ -550,6 +560,106 @@ function computeStability(readings, config) {
       spread,
       since,
       latest: values.at(-1) ?? null,
+    };
+  }
+
+  if (config.mode === "sps30") {
+    const validSamples = (readings ?? []).filter((reading) => {
+      const value = reading[config.key];
+      return value !== null && value !== undefined && !Number.isNaN(value) && Number(value) >= 0;
+    });
+    const latestTimestamp = validSamples.length
+      ? validSamples[validSamples.length - 1].capturedAt ?? validSamples[validSamples.length - 1]._creationTime
+      : null;
+    const health = computeHealthStatus(readings, config);
+
+    if (!latestTimestamp) {
+      return {
+        ...config,
+        stable: false,
+        level: "warming",
+        reason: "No Recent Data",
+        detail: "Waiting for the first valid SPS30 packet",
+        health,
+        spread: null,
+        since: null,
+        latest: null,
+      };
+    }
+
+    if (Date.now() - latestTimestamp > config.staleAfterMs) {
+      return {
+        ...config,
+        stable: false,
+        level: "warming",
+        reason: "No Recent Data",
+        detail: "Latest valid SPS30 packet is older than 3 minutes",
+        health,
+        spread: null,
+        since: null,
+        latest: null,
+      };
+    }
+
+    const samples = validSamples.filter((reading) => {
+      const timestamp = reading.capturedAt ?? reading._creationTime;
+      return latestTimestamp - timestamp <= config.targetWindowMs;
+    });
+    const windowDuration =
+      (samples.at(-1)?.capturedAt ?? samples.at(-1)?._creationTime ?? latestTimestamp) -
+      (samples[0]?.capturedAt ?? samples[0]?._creationTime ?? latestTimestamp);
+
+    if (samples.length < config.minPoints || windowDuration < config.minWindowMs) {
+      return {
+        ...config,
+        stable: false,
+        level: "warming",
+        reason: "Insufficient Data",
+        detail: `${samples.length} valid SPS30 packets over ${Math.round(windowDuration / 60000)} min. Need at least ${config.minPoints} packets over 30 min.`,
+        health,
+        spread: null,
+        since: samples[0]?.capturedAt ?? samples[0]?._creationTime ?? null,
+        latest: samples.at(-1)?.[config.key] ?? null,
+      };
+    }
+
+    const values = samples.map((reading) => Number(reading[config.key]));
+    const since = samples[0].capturedAt ?? samples[0]._creationTime;
+    const latestValue = values.at(-1) ?? null;
+    const trendSamples = samples.filter((reading) => {
+      const timestamp = reading.capturedAt ?? reading._creationTime;
+      return latestTimestamp - timestamp <= config.trendWindowMs;
+    });
+    const trendValues = trendSamples.map((reading) => Number(reading[config.key]));
+    const trendMedian = median(trendValues) ?? (latestValue ?? 0);
+    const absoluteChange = latestValue === null ? 0 : Math.abs(latestValue - trendMedian);
+    const relativeChange =
+      trendMedian > 0 ? absoluteChange / trendMedian : (absoluteChange > 0 ? 1 : 0);
+    const trendSlope = slopePerHour(trendSamples, config.key);
+    const trendDirection =
+      latestValue === null || absoluteChange <= config.trendAbsoluteThreshold || relativeChange <= config.trendRelativeThreshold
+        ? "Steady"
+        : latestValue > trendMedian
+          ? "Increasing"
+          : "Decreasing";
+
+    let level = "good";
+    let reason = "Trusted / Stable";
+    if (latestValue === null || latestValue < 0) {
+      level = "warming";
+      reason = "Invalid Data";
+    }
+
+    return {
+      ...config,
+      stable: reason === "Trusted / Stable",
+      level,
+      reason,
+      detail: `PM trend: ${trendDirection}. Latest ${formatCompactValue(latestValue)} ${config.unit}, 15 min median ${formatCompactValue(trendMedian)} ${config.unit}, change ${absoluteChange.toFixed(1)} ${config.unit}, slope ${trendSlope.toFixed(1)} ${config.unit}/h. Air quality labels are dashboard interpretations, not SPS30 internal states.`,
+      health,
+      spread: absoluteChange,
+      since,
+      latest: latestValue,
     };
   }
 
