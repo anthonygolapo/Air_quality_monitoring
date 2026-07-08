@@ -1068,7 +1068,7 @@ export default function App() {
 
       <StabilityPanel readings={trend} />
 
-      <section className="panel-grid">
+      <section className="trend-section">
         <GasTrendChart
           readings={trend}
           rangeKey={selectedRange}
@@ -1076,101 +1076,101 @@ export default function App() {
           visibleSensors={visibleSensors}
           onToggleSensor={handleToggleSensor}
         />
-
-        <article className="panel">
-          <div className="panel-header">
-            <div>
-              <p className="panel-kicker">Packet details</p>
-              <h2>Current payload</h2>
-            </div>
-          </div>
-
-          <div className="packet-gap-summary">
-            <article>
-              <p className="panel-kicker">Missing packets</p>
-              <h3>{packetGapSummary?.totalMissingPackets ?? "--"}</h3>
-            </article>
-            <article>
-              <p className="panel-kicker">Gap events</p>
-              <h3>{packetGapSummary?.gapEvents ?? "--"}</h3>
-            </article>
-            <article>
-              <p className="panel-kicker">Longest gap</p>
-              <h3>{packetGapSummary?.longestGapPackets ?? "--"}</h3>
-            </article>
-            <article>
-              <p className="panel-kicker">Sequence resets</p>
-              <h3>{packetGapSummary?.resetsDetected ?? "--"}</h3>
-            </article>
-          </div>
-
-          <p className="packet-gap-note">
-            Missing packets are counted when the current packet sequence jumps by more than 1. If
-            sequence is unavailable, the dashboard falls back to 1-minute timing gaps.
-          </p>
-
-          {packetGapSummary?.latestGap ? (
-            <div className="latest-gap-card">
-              <p className="panel-kicker">Latest detected gap</p>
-              <p className="latest-gap-main">
-                {packetGapSummary.latestGap.missingPackets} missing packet
-                {packetGapSummary.latestGap.missingPackets === 1 ? "" : "s"}
-              </p>
-              <p className="latest-gap-sub">
-                Between {formatDate(packetGapSummary.latestGap.fromTimestamp)} and{" "}
-                {formatDate(packetGapSummary.latestGap.toTimestamp)}
-              </p>
-              <p className="latest-gap-sub">
-                {packetGapSummary.latestGap.fromSequence !== null &&
-                packetGapSummary.latestGap.toSequence !== null
-                  ? `Sequence ${packetGapSummary.latestGap.fromSequence} to ${packetGapSummary.latestGap.toSequence}`
-                  : "Detected from packet timing"}
-              </p>
-            </div>
-          ) : (
-            <p className="packet-gap-note">
-              {packetGapSummary
-                ? "No missing packet gaps detected in the full stored history."
-                : "Loading full packet history summary..."}
-            </p>
-          )}
-
-          <dl className="details-list">
-            <div>
-              <dt>Sequence</dt>
-              <dd>{latest?.sequence ?? "--"}</dd>
-            </div>
-            <div>
-              <dt>Status</dt>
-              <dd>{latest?.status ?? "--"}</dd>
-            </div>
-            <div>
-              <dt>Validity mask</dt>
-              <dd>{latest?.validityMask ?? "--"}</dd>
-            </div>
-            <div>
-              <dt>CRC</dt>
-              <dd>{latest?.crc ?? "--"}</dd>
-            </div>
-            <div>
-              <dt>CRC check</dt>
-              <dd>{latest?.crcOk === undefined ? "--" : latest.crcOk ? "PASS" : "FAIL"}</dd>
-            </div>
-            <div>
-              <dt>Raw payload</dt>
-              <dd className="payload">{latest?.rawPayload ?? "--"}</dd>
-            </div>
-            <div>
-              <dt>RSSI</dt>
-              <dd>{latest?.rssi ?? "--"}</dd>
-            </div>
-            <div>
-              <dt>SNR</dt>
-              <dd>{latest?.snr ?? "--"}</dd>
-            </div>
-          </dl>
-        </article>
       </section>
+
+      <article className="panel packet-details-panel">
+        <div className="panel-header">
+          <div>
+            <p className="panel-kicker">Packet details</p>
+            <h2>Current payload</h2>
+          </div>
+        </div>
+
+        <div className="packet-gap-summary">
+          <article>
+            <p className="panel-kicker">Missing packets</p>
+            <h3>{packetGapSummary?.totalMissingPackets ?? "--"}</h3>
+          </article>
+          <article>
+            <p className="panel-kicker">Gap events</p>
+            <h3>{packetGapSummary?.gapEvents ?? "--"}</h3>
+          </article>
+          <article>
+            <p className="panel-kicker">Longest gap</p>
+            <h3>{packetGapSummary?.longestGapPackets ?? "--"}</h3>
+          </article>
+          <article>
+            <p className="panel-kicker">Sequence resets</p>
+            <h3>{packetGapSummary?.resetsDetected ?? "--"}</h3>
+          </article>
+        </div>
+
+        <p className="packet-gap-note">
+          Missing packets are counted when the current packet sequence jumps by more than 1. If
+          sequence is unavailable, the dashboard falls back to 1-minute timing gaps.
+        </p>
+
+        {packetGapSummary?.latestGap ? (
+          <div className="latest-gap-card">
+            <p className="panel-kicker">Latest detected gap</p>
+            <p className="latest-gap-main">
+              {packetGapSummary.latestGap.missingPackets} missing packet
+              {packetGapSummary.latestGap.missingPackets === 1 ? "" : "s"}
+            </p>
+            <p className="latest-gap-sub">
+              Between {formatDate(packetGapSummary.latestGap.fromTimestamp)} and{" "}
+              {formatDate(packetGapSummary.latestGap.toTimestamp)}
+            </p>
+            <p className="latest-gap-sub">
+              {packetGapSummary.latestGap.fromSequence !== null &&
+              packetGapSummary.latestGap.toSequence !== null
+                ? `Sequence ${packetGapSummary.latestGap.fromSequence} to ${packetGapSummary.latestGap.toSequence}`
+                : "Detected from packet timing"}
+            </p>
+          </div>
+        ) : (
+          <p className="packet-gap-note">
+            {packetGapSummary
+              ? "No missing packet gaps detected in the full stored history."
+              : "Loading full packet history summary..."}
+          </p>
+        )}
+
+        <dl className="details-list">
+          <div>
+            <dt>Sequence</dt>
+            <dd>{latest?.sequence ?? "--"}</dd>
+          </div>
+          <div>
+            <dt>Status</dt>
+            <dd>{latest?.status ?? "--"}</dd>
+          </div>
+          <div>
+            <dt>Validity mask</dt>
+            <dd>{latest?.validityMask ?? "--"}</dd>
+          </div>
+          <div>
+            <dt>CRC</dt>
+            <dd>{latest?.crc ?? "--"}</dd>
+          </div>
+          <div>
+            <dt>CRC check</dt>
+            <dd>{latest?.crcOk === undefined ? "--" : latest.crcOk ? "PASS" : "FAIL"}</dd>
+          </div>
+          <div>
+            <dt>Raw payload</dt>
+            <dd className="payload">{latest?.rawPayload ?? "--"}</dd>
+          </div>
+          <div>
+            <dt>RSSI</dt>
+            <dd>{latest?.rssi ?? "--"}</dd>
+          </div>
+          <div>
+            <dt>SNR</dt>
+            <dd>{latest?.snr ?? "--"}</dd>
+          </div>
+        </dl>
+      </article>
 
       <section className="panel">
         <div className="panel-header">

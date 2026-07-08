@@ -26,6 +26,24 @@ constexpr uint32_t WIFI_RETRY_MS = 500;
 constexpr uint32_t WIFI_TIMEOUT_MS = 20000;
 constexpr uint32_t HTTP_TIMEOUT_MS = 15000;
 constexpr size_t EXPECTED_PACKET_FIELDS = 13;
+constexpr size_t RX_QUEUE_SIZE = 4;
+constexpr size_t MAX_RX_PAYLOAD_LENGTH = 255;
+
+struct ReceivedPacket {
+  char payload[MAX_RX_PAYLOAD_LENGTH + 1] = {0};
+  uint16_t payloadLength = 0;
+  int rssi = 0;
+  float snr = 0.0f;
+  bool ready = false;
+};
+
+volatile uint8_t gRxWriteIndex = 0;
+volatile uint8_t gRxReadIndex = 0;
+volatile uint8_t gRxCount = 0;
+volatile uint32_t gRxDroppedPackets = 0;
+ReceivedPacket gRxQueue[RX_QUEUE_SIZE];
+
+void onReceiveLoRaPacket(int packetSize);
 
 String escapeJson(const String& input) {
   String output;
@@ -183,6 +201,66 @@ bool isHexCrc(const String& value) {
   return true;
 }
 
+bool isPrintablePayload(const String& payload) {
+  for (size_t i = 0; i < payload.length(); i++) {
+    char c = payload[i];
+    if (c == '\r' || c == '\n' || c == '\t') {
+      continue;
+    }
+    if (c < 32 || c > 126) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
+bool validateCurrentPacket(const String& payload, String& reason) {
+  if (payload.length() == 0) {
+    reason = "empty payload";
+    return false;
+  }
+
+  if (!isPrintablePayload(payload)) {
+    reason = "non-printable payload";
+    return false;
+  }
+
+  String fields[16];
+  size_t fieldCount = 0;
+  if (!splitCsvLine(payload, fields, 16, fieldCount) || fieldCount != EXPECTED_PACKET_FIELDS) {
+    reason = "unexpected field count";
+    return false;
+  }
+
+  if (!isNumericString(fields[1])) {
+    reason = "sequence is not numeric";
+    return false;
+  }
+
+  if (!isNumericString(fields[11])) {
+    reason = "validity mask is not numeric";
+    return false;
+  }
+
+  String payloadWithoutCrc = joinFields(fields, EXPECTED_PACKET_FIELDS - 1);
+  String calculatedCrc = crcToHex(calculateCRC(payloadWithoutCrc));
+  String receivedCrc = toUpperTrimmed(fields[12]);
+
+  if (!isHexCrc(receivedCrc)) {
+    reason = "crc field is not hex";
+    return false;
+  }
+
+  if (receivedCrc != calculatedCrc) {
+    reason = "crc mismatch";
+    return false;
+  }
+
+  reason = "ok";
+  return true;
+}
+
 bool ensureWiFi() {
   if (WiFi.status() == WL_CONNECTED) {
     return true;
@@ -237,10 +315,43 @@ bool beginLoRa() {
   LoRa.setCodingRate4(LORA_CODING_RATE_DENOMINATOR);
   LoRa.setSyncWord(LORA_SYNC_WORD);
   LoRa.enableCrc();
+  LoRa.onReceive(onReceiveLoRaPacket);
   LoRa.receive();
 
   Serial.println("[LORA] Receiver ready.");
   return true;
+}
+
+void onReceiveLoRaPacket(int packetSize) {
+  if (packetSize <= 0) {
+    LoRa.receive();
+    return;
+  }
+
+  int rssi = LoRa.packetRssi();
+  float snr = LoRa.packetSnr();
+
+  if (gRxCount >= RX_QUEUE_SIZE) {
+    gRxDroppedPackets++;
+    LoRa.receive();
+    return;
+  }
+
+  uint8_t slot = gRxWriteIndex;
+  uint16_t length = 0;
+  while (LoRa.available() && length < MAX_RX_PAYLOAD_LENGTH) {
+    gRxQueue[slot].payload[length++] = static_cast<char>(LoRa.read());
+  }
+  gRxQueue[slot].payload[length] = '\0';
+  gRxQueue[slot].payloadLength = length;
+  gRxQueue[slot].rssi = rssi;
+  gRxQueue[slot].snr = snr;
+  gRxQueue[slot].ready = true;
+
+  gRxWriteIndex = static_cast<uint8_t>((gRxWriteIndex + 1) % RX_QUEUE_SIZE);
+  gRxCount++;
+
+  LoRa.receive();
 }
 
 String buildRequestBody(const String& rawPayload, int rssi, float snr) {
@@ -345,25 +456,43 @@ void setup() {
   ensureWiFi();
 }
 
-void loop() {
-  int packetSize = LoRa.parsePacket();
+bool popReceivedPacket(ReceivedPacket& packet) {
+  noInterrupts();
+  if (gRxCount == 0) {
+    interrupts();
+    return false;
+  }
 
-  if (packetSize <= 0) {
-    delay(50);
+  uint8_t slot = gRxReadIndex;
+  packet = gRxQueue[slot];
+  gRxQueue[slot].ready = false;
+  gRxQueue[slot].payload[0] = '\0';
+  gRxQueue[slot].payloadLength = 0;
+  gRxReadIndex = static_cast<uint8_t>((gRxReadIndex + 1) % RX_QUEUE_SIZE);
+  gRxCount--;
+  interrupts();
+  return true;
+}
+
+void loop() {
+  ReceivedPacket packet;
+  if (!popReceivedPacket(packet)) {
+    static uint32_t lastDroppedLog = 0;
+    if (gRxDroppedPackets > 0 && millis() - lastDroppedLog >= 5000UL) {
+      lastDroppedLog = millis();
+      Serial.print("[LORA] Dropped queued packets: ");
+      Serial.println(gRxDroppedPackets);
+    }
+    delay(20);
     return;
   }
 
   digitalWrite(LED_PIN, HIGH);
 
-  String payload;
-  while (LoRa.available()) {
-    payload += static_cast<char>(LoRa.read());
-  }
-
+  String payload = String(packet.payload);
   payload.trim();
-
-  int rssi = LoRa.packetRssi();
-  float snr = LoRa.packetSnr();
+  int rssi = packet.rssi;
+  float snr = packet.snr;
 
   Serial.println();
   Serial.println("[LORA] Packet received");
@@ -373,6 +502,14 @@ void loop() {
   Serial.println(rssi);
   Serial.print("[LORA] SNR: ");
   Serial.println(snr, 2);
+
+  String validationReason;
+  if (!validateCurrentPacket(payload, validationReason)) {
+    Serial.print("[LORA] Packet rejected: ");
+    Serial.println(validationReason);
+    digitalWrite(LED_PIN, LOW);
+    return;
+  }
 
   String fields[16];
   size_t fieldCount = 0;
@@ -418,7 +555,6 @@ void loop() {
   if (payload.length() == 0) {
     Serial.println("[LORA] Empty payload skipped.");
     digitalWrite(LED_PIN, LOW);
-    LoRa.receive();
     return;
   }
 
@@ -429,5 +565,4 @@ void loop() {
   }
 
   digitalWrite(LED_PIN, LOW);
-  LoRa.receive();
 }

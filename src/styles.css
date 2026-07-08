@@ -496,6 +496,11 @@ button:disabled {
   margin-bottom: 20px;
 }
 
+.trend-section,
+.packet-details-panel {
+  margin-bottom: 20px;
+}
+
 .panel-header {
   display: flex;
   justify-content: space-between;
