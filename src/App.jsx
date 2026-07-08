@@ -681,7 +681,7 @@ function computeStability(readings, config) {
       stable: dashboardStatus.sensorStatus === "Stable",
       level: sensorStatusTone,
       reason: `Sensor Status: ${dashboardStatus.sensorStatus}`,
-      detail: `Gas Event Status: ${dashboardStatus.gasEventStatus}. Median ${formatCompactValue(dashboardStatus.rollingMedian)} ${config.unit}, threshold ${dashboardStatus.threshold} ${config.unit}, slope ${dashboardStatus.slopePpbPerHour === null ? "--" : dashboardStatus.slopePpbPerHour.toFixed(1)} ppb/h, ${(dashboardStatus.withinBandRatio ?? 0) * 100}% within band.`,
+      detail: `Median ${formatCompactValue(dashboardStatus.rollingMedian)} ${config.unit}, threshold ${dashboardStatus.threshold} ${config.unit}, slope ${dashboardStatus.slopePpbPerHour === null ? "--" : dashboardStatus.slopePpbPerHour.toFixed(1)} ppb/h, ${(dashboardStatus.withinBandRatio ?? 0) * 100}% within band.`,
       health,
       spread: dashboardStatus.withinBandRatio,
       since: dashboardStatus.validPacketCount > 0 ? Date.now() - dashboardStatus.timeCoverageMinutes * 60000 : null,
