@@ -384,6 +384,14 @@ function filterRecentValidReadings(readings, now, windowMinutes, key) {
   });
 }
 
+function filterRecentWindowReadings(readings, now, windowMinutes) {
+  const windowMs = windowMinutes * 60 * 1000;
+  return (readings ?? []).filter((reading) => {
+    const timestamp = reading.capturedAt ?? reading._creationTime;
+    return timestamp && now - timestamp <= windowMs;
+  });
+}
+
 function calculateMedian(values) {
   return median(values);
 }
@@ -405,6 +413,7 @@ function calculateWithinBandRatio(readings, baselineMedian, threshold, key) {
 
 function computeDGS2SensorStatus(sensorType, readings, now, key) {
   const threshold = getDGS2Threshold(sensorType);
+  const recentWindowReadings = filterRecentWindowReadings(readings, now, 60);
   const recentReadings = filterRecentValidReadings(readings, now, 60, key);
   const latestReading = recentReadings.at(-1) ?? null;
   const latestTimestamp = latestReading ? latestReading.capturedAt ?? latestReading._creationTime : null;
@@ -445,7 +454,10 @@ function computeDGS2SensorStatus(sensorType, readings, now, key) {
   const slopePpbPerHour = calculateSlopePpbPerHour(recentReadings, key);
   const withinBandRatio = calculateWithinBandRatio(recentReadings, rollingMedian, threshold, key);
   const valuesRange = Math.max(...values) - Math.min(...values);
-  const invalidRatio = (readings ?? []).length > 0 ? 1 - recentReadings.length / (readings ?? []).length : 0;
+  const invalidRatio =
+    recentWindowReadings.length > 0
+      ? 1 - recentReadings.length / recentWindowReadings.length
+      : 0;
 
   if (invalidRatio > 0.5) {
     return {
