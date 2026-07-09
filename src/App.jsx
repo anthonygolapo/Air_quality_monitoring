@@ -1079,6 +1079,8 @@ function RangeTable({ readings, rangeKey }) {
             <th>SO2</th>
             <th>CO</th>
             <th>O3</th>
+            <th>PM2.5</th>
+            <th>PM10</th>
             <th>Temp</th>
             <th>Humidity</th>
           </tr>
@@ -1091,6 +1093,8 @@ function RangeTable({ readings, rangeKey }) {
               <td>{formatValue(reading.so2Ppb, "ppb")}</td>
               <td>{formatValue(reading.coPpb, "ppb")}</td>
               <td>{formatValue(reading.o3Ppb, "ppb")}</td>
+              <td>{formatValue(reading.pm2p5, "ug/m3")}</td>
+              <td>{formatValue(reading.pm10, "ug/m3")}</td>
               <td>{formatValue(reading.temperatureC, "C")}</td>
               <td>{formatValue(reading.humidityRh, "%")}</td>
             </tr>
