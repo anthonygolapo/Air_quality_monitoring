@@ -193,6 +193,10 @@ function formatCompactValue(value, digits = 1) {
   return Number(value).toFixed(digits);
 }
 
+function getDisplayDigits(unit) {
+  return unit === "ug/m3" ? 2 : 1;
+}
+
 function formatDate(timestamp) {
   if (!timestamp) {
     return "--";
@@ -286,7 +290,7 @@ function MetricCard({ label, value, unit, accent }) {
   return (
     <article className={`metric-card ${accent}`}>
       <p className="metric-label">{label}</p>
-      <p className="metric-value">{formatValue(value, unit)}</p>
+      <p className="metric-value">{formatValue(value, unit, getDisplayDigits(unit))}</p>
     </article>
   );
 }
@@ -312,7 +316,7 @@ function GaugeCard({ title, subtitle, value, unit, max, colorClass }) {
       </div>
       <div className={`gauge-shell ${colorClass}`} style={{ "--gauge-value": `${percent}%` }}>
         <div className="gauge-center">
-          <p className="gauge-number">{formatCompactValue(value)}</p>
+          <p className="gauge-number">{formatCompactValue(value, getDisplayDigits(unit))}</p>
           <p className="gauge-unit">{unit}</p>
         </div>
       </div>
@@ -673,7 +677,7 @@ function computeHealthStatus(readings, config) {
     average: avg,
     windowCoveredMs,
     requiredWindowMs: config.healthAverageWindowMs,
-    detail: `Average used: ${formatCompactValue(avg)} ${config.unit} over ${formatDuration(windowCoveredMs)}`,
+      detail: `Average used: ${formatCompactValue(avg, getDisplayDigits(config.unit))} ${config.unit} over ${formatDuration(windowCoveredMs)}`,
   };
 }
 
@@ -693,7 +697,7 @@ function computeStability(readings, config) {
       stable: dashboardStatus.sensorStatus === "Stable",
       level: sensorStatusTone,
       reason: `Sensor Status: ${dashboardStatus.sensorStatus}`,
-      detail: `Median ${formatCompactValue(dashboardStatus.rollingMedian)} ${config.unit}, threshold ${dashboardStatus.threshold} ${config.unit}, slope ${dashboardStatus.slopePpbPerHour === null ? "--" : dashboardStatus.slopePpbPerHour.toFixed(1)} ppb/h, ${(dashboardStatus.withinBandRatio ?? 0) * 100}% within band.`,
+      detail: `Median ${formatCompactValue(dashboardStatus.rollingMedian, getDisplayDigits(config.unit))} ${config.unit}, threshold ${dashboardStatus.threshold} ${config.unit}, slope ${dashboardStatus.slopePpbPerHour === null ? "--" : dashboardStatus.slopePpbPerHour.toFixed(1)} ppb/h, ${(dashboardStatus.withinBandRatio ?? 0) * 100}% within band.`,
       health,
       spread: dashboardStatus.withinBandRatio,
       since: dashboardStatus.validPacketCount > 0 ? Date.now() - dashboardStatus.timeCoverageMinutes * 60000 : null,
@@ -802,7 +806,7 @@ function computeStability(readings, config) {
       stable: reason === "Trusted / Stable",
       level,
       reason,
-      detail: `PM trend: ${trendDirection}. Latest ${formatCompactValue(latestValue)} ${config.unit}, 15 min median ${formatCompactValue(trendMedian)} ${config.unit}, change ${absoluteChange.toFixed(1)} ${config.unit}, slope ${trendSlope.toFixed(1)} ${config.unit}/h. Air quality labels are dashboard interpretations, not SPS30 internal states.`,
+      detail: `PM trend: ${trendDirection}. Latest ${formatCompactValue(latestValue, getDisplayDigits(config.unit))} ${config.unit}, 15 min median ${formatCompactValue(trendMedian, getDisplayDigits(config.unit))} ${config.unit}, change ${absoluteChange.toFixed(2)} ${config.unit}, slope ${trendSlope.toFixed(1)} ${config.unit}/h. Air quality labels are dashboard interpretations, not SPS30 internal states.`,
       health,
       spread: absoluteChange,
       since,
@@ -1093,8 +1097,8 @@ function RangeTable({ readings, rangeKey }) {
               <td>{formatValue(reading.so2Ppb, "ppb")}</td>
               <td>{formatValue(reading.coPpb, "ppb")}</td>
               <td>{formatValue(reading.o3Ppb, "ppb")}</td>
-              <td>{formatValue(reading.pm2p5, "ug/m3")}</td>
-              <td>{formatValue(reading.pm10, "ug/m3")}</td>
+              <td>{formatValue(reading.pm2p5, "ug/m3", 2)}</td>
+              <td>{formatValue(reading.pm10, "ug/m3", 2)}</td>
               <td>{formatValue(reading.temperatureC, "C")}</td>
               <td>{formatValue(reading.humidityRh, "%")}</td>
             </tr>
@@ -1150,7 +1154,7 @@ function StabilityPanel({ readings }) {
               </span>
             </div>
             <p className="stability-reading">
-              {formatCompactValue(summary.latest)} {summary.unit}
+              {formatCompactValue(summary.latest, getDisplayDigits(summary.unit))} {summary.unit}
             </p>
             <p className="stability-text">{summary.reason}</p>
             <p className="stability-text secondary">{summary.detail}</p>
