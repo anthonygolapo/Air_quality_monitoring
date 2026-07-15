@@ -23,6 +23,44 @@ Important transmitter note:
 
 - The DGS2 single-measurement command is currently set to `"\r"` in the sketch because that is the command pattern already present in the local hardware notes. If your DGS2 firmware expects a different trigger command, update `DGS2_SINGLE_MEASUREMENT_COMMAND` before uploading.
 
+## SPS30-only test sketch
+
+Use [esp32_s3_sps30_only_5s/esp32_s3_sps30_only_5s.ino](C:/Users/ENVI-COMM/Desktop/Airquality/arduino/esp32_s3_sps30_only_5s/esp32_s3_sps30_only_5s.ino:1) when you want to test only the Sensirion SPS30.
+
+This sketch:
+
+- does not use LoRa
+- does not use deep sleep
+- starts SPS30 continuous measurement once
+- waits 30 seconds for stabilization
+- prints `PM1.0`, `PM2.5`, and `PM10` every 5 seconds over Serial
+
+Install these Arduino libraries before uploading:
+
+- `Sensirion I2C SPS30`
+- Built-in ESP32 `Wire`
+
+## SPS30-only LoRa sketch
+
+Use [esp32_s3_sps30_only_lora_5s/esp32_s3_sps30_only_lora_5s.ino](C:/Users/ENVI-COMM/Desktop/Airquality/arduino/esp32_s3_sps30_only_lora_5s/esp32_s3_sps30_only_lora_5s.ino:1) when you want to send only SPS30 particulate data through your existing LoRa receiver and Convex pipeline.
+
+This sketch:
+
+- reads only the SPS30
+- does not use deep sleep
+- starts SPS30 continuous measurement once
+- waits 30 seconds for stabilization
+- reads every 5 seconds
+- transmits the readings over LoRa using the same CSV packet layout your receiver already expects
+- fills gas and environment fields with sentinels, and sets only the PM validity bit
+
+Install these Arduino libraries before uploading:
+
+- `LoRa`
+- `Sensirion I2C SPS30`
+- Built-in ESP32 `SPI`
+- Built-in ESP32 `Wire`
+
 ## Receiver
 
 Use [esp32_lora_receiver_to_convex/esp32_lora_receiver_to_convex.ino](C:/Users/ENVI-COMM/Desktop/Airquality/arduino/esp32_lora_receiver_to_convex/esp32_lora_receiver_to_convex.ino:1) on the ESP32 that receives LoRa and forwards packets to Convex over Wi-Fi.

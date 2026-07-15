@@ -534,24 +534,15 @@ bool beginSps30() {
   return true;
 }
 
-bool wakeSps30ForMeasurement() {
+bool ensureSps30MeasurementRunning() {
   if (!gSps30Ready) {
     return false;
   }
 
-  int16_t error = sps30.wakeUpSequence();
-  if (error != 0) {
-    Serial.print("[SPS30] wakeUpSequence failed: ");
-    Serial.println(error);
-    return false;
-  }
-
-  delay(100);
-
   for (uint8_t attempt = 1; attempt <= SPS30_MAX_RETRIES; attempt++) {
-    error = sps30.startMeasurement(SPS30_OUTPUT_FORMAT_OUTPUT_FORMAT_FLOAT);
+    int16_t error = sps30.startMeasurement(SPS30_OUTPUT_FORMAT_OUTPUT_FORMAT_FLOAT);
     if (error == 0) {
-      Serial.println("[SPS30] Initialized and measuring.");
+      Serial.println("[SPS30] Continuous measurement active.");
       return true;
     }
 
@@ -559,6 +550,14 @@ bool wakeSps30ForMeasurement() {
     Serial.print(attempt);
     Serial.print("/3 failed: ");
     Serial.println(error);
+
+    uint16_t dataReady = 0;
+    int16_t probeError = sps30.readDataReadyFlag(dataReady);
+    if (probeError == 0) {
+      Serial.println("[SPS30] Sensor is responsive. Assuming measurement is already running.");
+      return true;
+    }
+
     delay(100);
   }
 
@@ -641,11 +640,11 @@ bool readSPS30(SPS30Reading& out) {
     out.pm10 = mc10p0;
 
     Serial.print("[SPS30] PM1=");
-    Serial.print(out.pm1_0, 1);
+    Serial.print(out.pm1_0, 2);
     Serial.print(" PM2.5=");
-    Serial.print(out.pm2_5, 1);
+    Serial.print(out.pm2_5, 2);
     Serial.print(" PM10=");
-    Serial.println(out.pm10, 1);
+    Serial.println(out.pm10, 2);
     return true;
   }
 
@@ -743,11 +742,11 @@ String buildLoRaPacket() {
   payloadWithoutCRC += ",";
   payloadWithoutCRC += formatIntOrSentinel(gSo2Reading.valid ? gSo2Reading.ppb : INVALID_INT_SENTINEL);
   payloadWithoutCRC += ",";
-  payloadWithoutCRC += formatFloatOrSentinel(gSps30Reading.valid ? gSps30Reading.pm1_0 : INVALID_FLOAT_SENTINEL, 1);
+  payloadWithoutCRC += formatFloatOrSentinel(gSps30Reading.valid ? gSps30Reading.pm1_0 : INVALID_FLOAT_SENTINEL, 2);
   payloadWithoutCRC += ",";
-  payloadWithoutCRC += formatFloatOrSentinel(gSps30Reading.valid ? gSps30Reading.pm2_5 : INVALID_FLOAT_SENTINEL, 1);
+  payloadWithoutCRC += formatFloatOrSentinel(gSps30Reading.valid ? gSps30Reading.pm2_5 : INVALID_FLOAT_SENTINEL, 2);
   payloadWithoutCRC += ",";
-  payloadWithoutCRC += formatFloatOrSentinel(gSps30Reading.valid ? gSps30Reading.pm10 : INVALID_FLOAT_SENTINEL, 1);
+  payloadWithoutCRC += formatFloatOrSentinel(gSps30Reading.valid ? gSps30Reading.pm10 : INVALID_FLOAT_SENTINEL, 2);
   payloadWithoutCRC += ",";
   payloadWithoutCRC += formatFloatOrSentinel(gEnvReading.valid ? gEnvReading.temperatureC : INVALID_FLOAT_SENTINEL, 1);
   payloadWithoutCRC += ",";
@@ -885,26 +884,6 @@ void readSps30AfterDgs2() {
   }
 }
 
-void stopSps30Measurement() {
-  if (!gSps30Ready) {
-    return;
-  }
-
-  int16_t stopError = sps30.stopMeasurement();
-  if (stopError != 0) {
-    Serial.print("[SPS30] stopMeasurement warning/error: ");
-    Serial.println(stopError);
-  }
-
-  int16_t sleepError = sps30.sleep();
-  if (sleepError != 0) {
-    Serial.print("[SPS30] sleep warning/error: ");
-    Serial.println(sleepError);
-  } else {
-    Serial.println("[SPS30] Sensor sleep entered.");
-  }
-}
-
 void setup() {
   Serial.begin(SERIAL_BAUD);
   delay(200);
@@ -925,7 +904,7 @@ void setup() {
   beginBusesAndSerialPorts();
 
   if (gSps30Ready) {
-    gSps30Ready = wakeSps30ForMeasurement();
+    gSps30Ready = ensureSps30MeasurementRunning();
   }
 
   waitForSps30WarmupWindow();
@@ -934,7 +913,6 @@ void setup() {
 
   String packet = buildLoRaPacket();
   transmitLoRaPacket(packet);
-  stopSps30Measurement();
   digitalWrite(LED_PIN, LOW);
   enterSleep();
 }
